@@ -1,4 +1,5 @@
 #!/bin/bash
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 # Lead Finder Venezuela - Nova Tech AI
 # Setup para macOS - haz doble clic para instalar
 

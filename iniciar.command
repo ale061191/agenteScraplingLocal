@@ -1,4 +1,5 @@
 #!/bin/bash
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 # Lead Finder Venezuela - Nova Tech AI
 # Inicio para macOS - haz doble clic para iniciar
 
@@ -89,6 +90,9 @@ cd dashboard
 npm run dev &
 DASHBOARD_PID=$!
 cd "$(dirname "$0")"
+
+# Asegurar que Node.js muera si se cierra la terminal
+trap "kill $DASHBOARD_PID 2>/dev/null; lsof -ti:3000 | xargs kill -9 2>/dev/null; exit" INT TERM EXIT
 
 # ---- ESPERAR A QUE EL SERVIDOR RESPONDA ----
 echo "[~] Esperando al servidor..."
