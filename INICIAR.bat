@@ -87,6 +87,18 @@ if not exist "leads_data\smtp_config.json" (
     )
 )
 
+:: ---- VERIFICAR E INSTALAR PLAYWRIGHT (si no esta) ----
+echo [~] Verificando navegadores de scraping...
+"%PYTHON_EXE%" -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True, timeout=5000); b.close(); p.stop()" >nul 2>&1
+if errorlevel 1 (
+    echo [~] Navegadores no encontrados. Instalando Playwright...
+    pip install playwright -q 2>nul
+    "%PYTHON_EXE%" -m playwright install chromium --with-deps
+    echo [OK] Navegadores instalados
+) else (
+    echo [OK] Navegadores de Playwright verificados
+)
+
 echo.
 
 :: ---- LIMPIAR CACHE Y MATAR SERVIDOR ANTERIOR ----
