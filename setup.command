@@ -46,7 +46,16 @@ echo "  OK: $(node --version)"
 echo ""
 
 echo "PASO 3: Instalando librerias Python..."
-pip3 install scrapling flask supabase -q 2>/dev/null || $PYTHON -m pip install scrapling flask supabase -q
+pip3 install scrapling flask supabase camoufox playwright certifi -q 2>/dev/null || $PYTHON -m pip install scrapling flask supabase camoufox playwright certifi -q
+echo "  OK"
+echo ""
+
+echo "PASO 3.5: Configurando Navegadores y Certificados..."
+$PYTHON -m camoufox fetch 2>/dev/null || true
+$PYTHON -m playwright install 2>/dev/null || true
+# Reparar certificados SSL nativos de Python en Mac
+open /Applications/Python\ 3.*/Install\ Certificates.command 2>/dev/null || true
+$PYTHON -c "import certifi; import os; os.environ['SSL_CERT_FILE'] = certifi.where()" 2>/dev/null || true
 echo "  OK"
 echo ""
 
