@@ -131,14 +131,28 @@ export async function POST(request: NextRequest) {
   proc.on('close', (code) => {
     const match = output.match(/(\d+)\s*encontrados/)
     const leadsFound = match ? parseInt(match[1]) : 0
+    let errorDetail = null
+
+    // Detect Playwright/browser errors
+    if (output.includes('playwright') || output.includes('browser') ||
+        output.includes('chromium') || output.includes('Executable') ||
+        output.includes('playwright._impl') || output.includes('AttributeError')) {
+      if (output.includes('AttributeError') && output.includes('chromium')) {
+        errorDetail = 'Navegador de Playwright no instalado. Ejecuta: python -m playwright install chromium --with-deps'
+      } else if (output.includes('Executable') || output.includes('browser')) {
+        errorDetail = 'Navegador de scraping no encontrado. Ejecuta: python -m playwright install chromium --with-deps'
+      }
+    }
+
     // Re-read the file and update the job status
     try {
       const raw = fs.readFileSync(JOBS_FILE, 'utf-8')
       const j = JSON.parse(raw)
       if (j[jobId]) {
-        j[jobId].status = code === 0 ? 'done' : 'error'
-        j[jobId].leadsFound = leadsFound
+        j[jobId].status = errorDetail ? 'error' : (code === 0 ? 'done' : 'error')
+        j[jobId].leadsFound = errorDetail ? 0 : leadsFound
         j[jobId].finished = new Date().toISOString()
+        if (errorDetail) j[jobId].error = errorDetail
         writeJobs(j)
         // Also trigger a refresh by updating leads.json in case the scraper didn't export
         try {
@@ -151,18 +165,21 @@ export async function POST(request: NextRequest) {
       } else {
         // Fallback: job wasn't found in file, create/update it directly
         writeJobs({ [jobId]: {
-          jobId, status: code === 0 ? 'done' : 'error',
-          leadsFound, finished: new Date().toISOString(),
+          jobId, status: errorDetail ? 'error' : (code === 0 ? 'done' : 'error'),
+          leadsFound: errorDetail ? 0 : leadsFound, finished: new Date().toISOString(),
+          ...(errorDetail ? { error: errorDetail } : {})
         }})
       }
     } catch {
       // File doesn't exist or corrupt, create a fresh one
       writeJobs({ [jobId]: {
-        jobId, status: code === 0 ? 'done' : 'error',
-        leadsFound, finished: new Date().toISOString(),
+        jobId, status: errorDetail ? 'error' : (code === 0 ? 'done' : 'error'),
+        leadsFound: errorDetail ? 0 : leadsFound, finished: new Date().toISOString(),
+        ...(errorDetail ? { error: errorDetail } : {})
       }})
     }
     console.log(`Local search done: ${leadsFound} leads`)
+    if (errorDetail) console.error(`[SEARCH ERROR] ${errorDetail}`)
   })
 
   return NextResponse.json({ jobId, status: 'running', message: 'Buscando localmente...' })
