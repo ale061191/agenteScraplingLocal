@@ -1,0 +1,9 @@
+{
+  "host": "smtp.gmail.com",
+  "port": 587,
+  "user": "voltajevzla@gmail.com",
+  "password": "omei fwjx yeis cqgx",
+  "use_tls": true,
+  "from_name": "Voltaje Plus C.A.",
+  "configured": true
+}

@@ -1,0 +1,27 @@
+============================================
+  LEAD FINDER VENEZUELA
+============================================
+
+SOLO 2 PASOS:
+
+PASO 1 - INSTALAR (solo la primera vez)
+  - Doble click en "setup.bat"
+  - Espera 5-10 minutos (instala Python, Node.js y librerias)
+  - Cuando termine, cierra la ventana
+
+PASO 2 - INICIAR
+  - Doble click en "INICIAR.bat"
+  - Se abrira automaticamente el navegador con el dashboard
+  - El menu en la terminal te deja buscar leads y subirlos a la nube
+
+QUE PUEDES HACER:
+
+  [VER LEADS]      -> Se ven en el navegador (dashboard)
+  [BUSCAR LEADS]   -> Opcion 1 en el menu (elige categoria + estado)
+  [SUBIR A NUBE]   -> Opcion 2 (para que otros vean los resultados)
+  [CERRAR]         -> Opcion 0 (cierra todo)
+
+NOTAS:
+  - No cierres la ventana negra mientras buscas
+  - Si la pagina no carga, espera 10 segundos y refresca
+  - Si algo falla, cierra todo y vuelve a abrir INICIAR.bat

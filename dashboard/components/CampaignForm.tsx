@@ -1,0 +1,498 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+
+const BUSINESS_CATEGORIES = [
+  "restaurantes", "hoteles", "centros comerciales", "gimnasios",
+  "hospitales", "clinicas", "discotecas", "clubes nocturnos",
+  "parques", "aeropuertos", "bares", "cafeterias",
+  "centros deportivos", "cines", "universidades", "supermercados",
+  "teatros", "centros de convenciones", "plazas", "farmacias",
+]
+
+function plainTextToHtml(text: string): string {
+  return text
+    .split(/\n\s*\n/)
+    .map(block => {
+      const lines = block.split('\n').filter(l => l.trim())
+      if (lines.length <= 1) return lines.join('<br>')
+      return lines.map(l => l.trim()).join('<br>')
+    })
+    .map(p => `<p style="margin:0 0 12px 0;line-height:1.6">${p}</p>`)
+    .join('')
+}
+
+interface Template {
+  id: string
+  name: string
+  category: string
+  subject: string
+  bodyPlain: string
+  bodyHtml: string
+  files: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+interface Props {
+  leadsCount: number
+  onSend: (opts: {
+    leadIds: number[]
+    subject: string
+    bodyHtml: string
+    files: string[]
+    filters?: { category?: string; status?: string; state?: string; city?: string }
+  }) => Promise<{ sent: number; output?: string }>
+  selectedIds: number[]
+  filters: { category: string; status: string; state: string; city: string }
+}
+
+export default function CampaignForm({ leadsCount, onSend, selectedIds, filters }: Props) {
+  const [subject, setSubject] = useState('')
+  const [body, setBody] = useState('')
+  const [files, setFiles] = useState<string[]>([])
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<{ type: 'ok' | 'error'; msg: string } | null>(null)
+  const [mode, setMode] = useState<'selected' | 'filtered'>('selected')
+  const [showPreview, setShowPreview] = useState(false)
+  const [historyTab, setHistoryTab] = useState<'all' | 'sent' | 'failed'>('all')
+  const [history, setHistory] = useState<any[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [selectedTemplate, setSelectedTemplate] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [templateCategory, setTemplateCategory] = useState('')
+  const [savingTemplate, setSavingTemplate] = useState(false)
+
+  const [showSmtpConfig, setShowSmtpConfig] = useState(false)
+  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com')
+  const [smtpPort, setSmtpPort] = useState('587')
+  const [smtpUser, setSmtpUser] = useState('')
+  const [smtpPass, setSmtpPass] = useState('')
+  const [smtpFromName, setSmtpFromName] = useState('Lead Finder')
+  const [smtpStatus, setSmtpStatus] = useState<{ configured: boolean; email: string | null }>({ configured: false, email: null })
+  const [savingSmtp, setSavingSmtp] = useState(false)
+  const [smtpResult, setSmtpResult] = useState<{ type: 'ok' | 'error'; msg: string } | null>(null)
+
+  const fetchHistory = async () => {
+    setLoadingHistory(true)
+    try {
+      const res = await fetch('/api/campaigns/history')
+      const data = await res.json()
+      const lines = (data.output || '').split('\n').filter((l: string) => l.trim() && l.includes('->'))
+      setHistory(lines.map((l: string) => {
+        const m = l.match(/\[(.+?)\]\s*Lead\s*(\d+)\s*->\s*(.+?):\s*(sent|error)\s*(.*)/)
+        return m ? { time: m[1], leadId: m[2], recipient: m[3], status: m[4], error: m[5] } : { raw: l }
+      }))
+    } catch { setHistory([]) }
+    setLoadingHistory(false)
+  }
+
+  const fetchTemplates = async () => {
+    try {
+      const res = await fetch('/api/campaigns/templates')
+      const data = await res.json()
+      setTemplates(data.templates || [])
+    } catch {}
+  }
+
+  const fetchSmtpStatus = async () => {
+    try {
+      const res = await fetch('/api/campaigns/config')
+      const data = await res.json()
+      setSmtpStatus({ configured: data.configured || false, email: data.email || null })
+      if (data.email) setSmtpUser(data.email)
+    } catch {}
+  }
+
+  useEffect(() => { fetchHistory(); fetchTemplates(); fetchSmtpStatus() }, [])
+
+  const handleTemplateSelect = (id: string) => {
+    setSelectedTemplate(id)
+    if (!id) return
+    const t = templates.find(t => t.id === id)
+    if (t) {
+      setSubject(t.subject)
+      setBody(t.bodyPlain)
+      setFiles(t.files || [])
+      setTemplateName(t.name)
+      setTemplateCategory(t.category || '')
+    }
+  }
+
+  const handleSaveTemplate = async () => {
+    if (!templateName || !subject || !body) return
+    setSavingTemplate(true)
+    try {
+      const existing = selectedTemplate ? templates.find(t => t.id === selectedTemplate) : null
+      const res = await fetch('/api/campaigns/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: existing?.id || undefined,
+          name: templateName,
+          category: templateCategory || filters.category || '',
+          subject,
+          bodyPlain: body,
+          bodyHtml: plainTextToHtml(body),
+          files,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) setTemplates(data.templates)
+      await fetchTemplates()
+    } catch {}
+    setSavingTemplate(false)
+  }
+
+  const handleDeleteTemplate = async () => {
+    if (!selectedTemplate) return
+    try {
+      await fetch(`/api/campaigns/templates?id=${selectedTemplate}`, { method: 'DELETE' })
+      setSelectedTemplate('')
+      setTemplateName('')
+      setTemplateCategory('')
+      await fetchTemplates()
+    } catch {}
+  }
+
+  const handleSend = async () => {
+    if (!subject || !body) return
+    setSending(true)
+    setResult(null)
+    try {
+      const bodyHtml = plainTextToHtml(body)
+      const res = await onSend({
+        subject,
+        bodyHtml,
+        files,
+        filters: mode === 'filtered' ? {
+          ...(filters.category ? { category: filters.category } : {}),
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.state ? { state: filters.state } : {}),
+          ...(filters.city ? { city: filters.city } : {}),
+        } : undefined,
+        leadIds: mode === 'selected' ? selectedIds : [],
+      })
+      if (res.sent > 0) {
+        setResult({ type: 'ok', msg: `Enviado a ${res.sent} destinatarios exitosamente` })
+        setBody('')
+        setSubject('')
+      } else {
+        setResult({ type: 'error', msg: `No se pudo enviar. Detalles: ${res.output || 'revise la configuracion SMTP'}` })
+      }
+      fetchHistory()
+    } catch (e: any) {
+      setResult({ type: 'error', msg: `Error: ${e.message || 'desconocido'}` })
+    }
+    setSending(false)
+  }
+
+  const filteredHistory = history.filter((h: any) => {
+    if (historyTab === 'sent') return h.status === 'sent'
+    if (historyTab === 'failed') return h.status === 'error'
+    return true
+  })
+
+  const categories = [...new Set(templates.map(t => t.category).filter(Boolean))]
+
+  return (
+    <div className="space-y-6 section-enter">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-semibold text-gray-700">Configuración SMTP</h3>
+          <button onClick={() => setShowSmtpConfig(!showSmtpConfig)}
+            className="text-xs text-blue-600 hover:text-blue-700 transition-colors">
+            {showSmtpConfig ? 'Ocultar' : smtpStatus.configured ? '✓ Configurado' : '⚙ Configurar'}
+          </button>
+        </div>
+        {smtpStatus.configured && !showSmtpConfig && (
+          <p className="text-xs text-green-600 mb-4">SMTP configurado: {smtpStatus.email || 'Gmail'}</p>
+        )}
+        {showSmtpConfig && (
+          <div className="mb-5 p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Host SMTP</label>
+                <input value={smtpHost} onChange={e => setSmtpHost(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Puerto</label>
+                <input value={smtpPort} onChange={e => setSmtpPort(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Correo Gmail</label>
+              <input value={smtpUser} onChange={e => setSmtpUser(e.target.value)} placeholder="tucorreo@gmail.com"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">
+                App Password (16 caracteres) 
+                <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"
+                  className="text-blue-500 hover:text-blue-700 ml-1">¿Cómo obtenerla?</a>
+              </label>
+              <input type="password" value={smtpPass} onChange={e => setSmtpPass(e.target.value)}
+                placeholder="xxxx xxxx xxxx xxxx"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Nombre del remitente</label>
+              <input value={smtpFromName} onChange={e => setSmtpFromName(e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={async () => {
+                if (!smtpUser || !smtpPass) return
+                setSavingSmtp(true)
+                setSmtpResult(null)
+                try {
+                  const res = await fetch('/api/campaigns/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      host: smtpHost || 'smtp.gmail.com',
+                      port: parseInt(smtpPort) || 587,
+                      user: smtpUser,
+                      password: smtpPass,
+                      fromName: smtpFromName || 'Lead Finder',
+                    }),
+                  })
+                  const data = await res.json()
+                  if (data.success) {
+                    setSmtpResult({ type: 'ok', msg: 'Configuración SMTP guardada exitosamente' })
+                    setSmtpStatus({ configured: true, email: smtpUser })
+                  } else {
+                    setSmtpResult({ type: 'error', msg: `Error: ${data.output || 'revise los datos'}` })
+                  }
+                } catch (e: any) {
+                  setSmtpResult({ type: 'error', msg: `Error: ${e.message}` })
+                }
+                setSavingSmtp(false)
+              }} disabled={savingSmtp || !smtpUser || !smtpPass}
+                className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+                  savingSmtp || !smtpUser || !smtpPass
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}>
+                {savingSmtp ? 'Guardando...' : 'Guardar configuración SMTP'}
+              </button>
+              {smtpResult && (
+                <span className={`text-xs ${smtpResult.type === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
+                  {smtpResult.msg}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+        <h3 className="font-semibold text-gray-700 mb-1 mt-4">Nueva Campaña de Correo</h3>
+        <p className="text-xs text-gray-400 mb-5">Redacta en texto plano, nosotros lo convertimos a HTML</p>
+
+        <div className="mb-5 p-3 bg-gray-50 rounded-lg border border-gray-100">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-xs font-medium text-gray-600">Plantillas guardadas</label>
+          </div>
+          <div className="flex gap-2">
+            <select value={selectedTemplate} onChange={e => handleTemplateSelect(e.target.value)}
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all bg-white">
+              <option value="">Seleccionar plantilla...</option>
+              {categories.map(cat => (
+                <optgroup key={cat} label={cat}>
+                  {templates.filter(t => t.category === cat).map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+              {templates.filter(t => !t.category).map(t => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            {selectedTemplate && (
+              <button onClick={handleDeleteTemplate}
+                className="px-3 py-2 text-xs text-red-600 hover:bg-red-50 border border-red-200 rounded-lg transition-colors">
+                Eliminar
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-4 mb-4">
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">Nombre de plantilla</label>
+            <input value={templateName} onChange={e => setTemplateName(e.target.value)}
+              placeholder="Ej: Oferta restaurantes"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+          </div>
+          <div className="flex-1">
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">Categoria</label>
+            <select value={templateCategory} onChange={e => setTemplateCategory(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all bg-white">
+              <option value="">Sin categoria</option>
+              {BUSINESS_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button onClick={handleSaveTemplate} disabled={savingTemplate || !templateName || !subject || !body}
+              className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+                savingTemplate || !templateName || !subject || !body
+                  ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}>
+              {savingTemplate ? 'Guardando...' : 'Guardar plantilla'}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex gap-4 mb-5">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={mode === 'selected'}
+              onChange={() => setMode('selected')} className="accent-blue-600" />
+            <span className="text-sm text-gray-600">
+              Enviar a seleccionados ({selectedIds.length})
+            </span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="radio" checked={mode === 'filtered'}
+              onChange={() => setMode('filtered')} className="accent-blue-600" />
+            <span className="text-sm text-gray-600">
+              Enviar a todos los filtrados ({leadsCount})
+            </span>
+          </label>
+        </div>
+
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">Asunto</label>
+          <input value={subject} onChange={e => setSubject(e.target.value)}
+            placeholder="Ej: Oferta especial para su negocio"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+        </div>
+
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-medium text-gray-600">Mensaje</label>
+            <button onClick={() => setShowPreview(!showPreview)}
+              className="text-xs text-blue-600 hover:text-blue-700 transition-colors">
+              {showPreview ? 'Editar' : 'Vista previa'}
+            </button>
+          </div>
+          {showPreview ? (
+            <div className="w-full border border-gray-200 rounded-lg px-3 py-3 text-sm min-h-[160px] bg-gray-50 prose prose-sm max-w-none"
+              dangerouslySetInnerHTML={{ __html: plainTextToHtml(body) || '<span class="text-gray-300">Sin contenido</span>' }} />
+          ) : (
+            <textarea value={body} onChange={e => setBody(e.target.value)}
+              placeholder="Escribe tu mensaje aqui&#10;&#10;Deja lineas en blanco entre parrafos&#10;El sistema convierte automaticamente tu texto a HTML"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm h-40 resize-none focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 transition-all" />
+          )}
+        </div>
+
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-gray-600 mb-1.5">Archivos adjuntos</label>
+          <div className="flex items-center gap-2 mb-2">
+            <label className="px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 cursor-pointer transition-colors">
+              Subir archivo
+              <input type="file" onChange={async (e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                const fd = new FormData()
+                fd.append('file', file)
+                const r = await fetch('/api/campaigns/upload', { method: 'POST', body: fd })
+                const d = await r.json()
+                if (d.success) setFiles(prev => [...prev, d.name])
+              }} className="hidden" />
+            </label>
+          </div>
+          {files.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {files.map(f => (
+                <span key={f} className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-gray-50 border border-gray-200 rounded-md">
+                  {f}
+                  <button onClick={async () => {
+                    await fetch(`/api/campaigns/upload?name=${f}`, { method: 'DELETE' })
+                    setFiles(prev => prev.filter(x => x !== f))
+                  }} className="text-gray-400 hover:text-red-500">&times;</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button onClick={handleSend} disabled={sending || !subject || !body || (mode === 'selected' && selectedIds.length === 0)}
+          className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
+            sending || !subject || !body || (mode === 'selected' && selectedIds.length === 0)
+              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+              : 'bg-rose-600 text-white hover:bg-rose-700 shadow-sm hover:shadow'
+          }`}>
+          {sending ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              Enviando...
+            </>
+          ) : (
+            <>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/>
+              </svg>
+              Enviar Campaña
+            </>
+          )}
+        </button>
+
+        {result && (
+          <div className={`mt-4 p-3 rounded-lg text-sm border section-enter ${
+            result.type === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-green-50 text-green-700 border-green-200'
+          }`}>
+            <strong>{result.type === 'error' ? 'Error:' : 'Exito:'}</strong> {result.msg}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold text-gray-700">Historial de Envios</h3>
+          <button onClick={fetchHistory} className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+            disabled={loadingHistory}>
+            {loadingHistory ? 'Cargando...' : 'Actualizar'}
+          </button>
+        </div>
+
+        <div className="flex gap-1 mb-4 border-b border-gray-100">
+          {(['all', 'sent', 'failed'] as const).map(tab => (
+            <button key={tab} onClick={() => setHistoryTab(tab)}
+              className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
+                historyTab === tab
+                  ? 'border-rose-500 text-rose-600'
+                  : 'border-transparent text-gray-400 hover:text-gray-600'
+              }`}>
+              {tab === 'all' ? 'Todos' : tab === 'sent' ? 'Enviados' : 'Fallidos'}
+            </button>
+          ))}
+        </div>
+
+        <div className="max-h-64 overflow-y-auto space-y-1">
+          {filteredHistory.length === 0 ? (
+            <div className="text-center text-gray-400 py-8 text-sm">
+              {loadingHistory ? 'Cargando...' : 'No hay envios registrados'}
+            </div>
+          ) : (
+            filteredHistory.map((h: any, i: number) => (
+              <div key={i} className={`flex items-center justify-between text-xs p-2 rounded-lg ${
+                h.status === 'sent' ? 'bg-green-50' : h.status === 'error' ? 'bg-red-50' : 'bg-gray-50'
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                    h.status === 'sent' ? 'bg-green-500' : 'bg-red-500'
+                  }`} />
+                  <span className="text-gray-700 truncate">{h.recipient || 'Lead ' + h.leadId}</span>
+                  {h.error && <span className="text-red-500 truncate max-w-[200px]">{h.error}</span>}
+                </div>
+                <span className="text-gray-400 shrink-0 ml-2">{h.time?.slice(5, 16) || ''}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

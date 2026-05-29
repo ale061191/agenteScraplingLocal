@@ -1,0 +1,12 @@
+node_modules/  
+.next/  
+__pycache__/  
+*.pyc  
+leads_data/leads.db  
+leads_data/leads.json  
+leads_data/leads.csv  
+leads_data/search_jobs.json  
+leads_data/status.json  
+leads_data/templates.json  
+dashboard/node_modules/  
+dashboard/.next/  
